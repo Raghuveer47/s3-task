@@ -88,7 +88,7 @@ function App() {
     formData.append("image", selectedFile);
 
     setIsUploading(true);
-    setStatus({ type: "info", message: "Uploading image to Amazon S3..." });
+    setStatus({ type: "info", message: "Uploading image to S3 and saving the record in RDS..." });
 
     try {
       const response = await fetch("/api/upload", {
@@ -129,11 +129,11 @@ function App() {
         <h1>Student Profile Image Upload</h1>
         <p>
           This app teaches the path from the browser to a Node.js backend, then
-          to Amazon S3. The frontend never talks to S3 directly.
+          to Amazon S3 for the image and Amazon RDS for the student record.
         </p>
         <p className="architecture">
-          Browser → React frontend → POST /api/upload → Express backend → AWS
-          SDK → Amazon S3 → profiles/
+          Browser → React frontend → Express backend → Amazon S3 (image) +
+          Amazon RDS (student data)
         </p>
       </header>
 
@@ -176,6 +176,9 @@ function App() {
           <div className="preview">
             <h3>Uploaded image</h3>
             <p>
+              <strong>Student name:</strong> {uploadedFile.studentName}
+            </p>
+            <p>
               <strong>File name:</strong> {uploadedFile.originalName}
             </p>
             <p>
@@ -199,13 +202,21 @@ function App() {
         )}
 
         {isLoadingFiles && files.length === 0 && (
-          <p className="empty">Loading files from Amazon S3...</p>
+          <p className="empty">Loading files from Amazon RDS...</p>
         )}
 
         {files.length > 0 && (
           <div className="file-list">
             {files.map((file) => (
-              <article className="file-card" key={file.key}>
+              <article className="file-card" key={file.id || file.key}>
+                {file.studentName && (
+                  <p>
+                    <strong>Student name:</strong> {file.studentName}
+                  </p>
+                )}
+                <p>
+                  <strong>File name:</strong> {file.originalName || file.key}
+                </p>
                 <p>
                   <strong>S3 key:</strong> {file.key}
                 </p>

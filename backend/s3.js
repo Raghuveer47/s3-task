@@ -1,7 +1,6 @@
 const {
   S3Client,
   PutObjectCommand,
-  ListObjectsV2Command,
   GetObjectCommand,
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -56,38 +55,9 @@ async function uploadImage(s3Client, { key, body, contentType }) {
   return url;
 }
 
-async function listUploadedFiles(s3Client) {
-  const response = await s3Client.send(
-    new ListObjectsV2Command({
-      Bucket: process.env.S3_BUCKET_NAME,
-      Prefix: "profiles/",
-    })
-  );
-
-  const objects = response.Contents || [];
-  const files = [];
-
-  for (const object of objects) {
-    if (!object.Key || object.Key.endsWith("/")) {
-      continue;
-    }
-
-    const url = await getViewUrl(s3Client, object.Key);
-    files.push({
-      key: object.Key,
-      size: object.Size,
-      lastModified: object.LastModified,
-      url,
-    });
-  }
-
-  files.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-  return files;
-}
-
 module.exports = {
   getMissingAwsConfig,
   createS3Client,
+  getViewUrl,
   uploadImage,
-  listUploadedFiles,
 };

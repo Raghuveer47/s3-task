@@ -6,9 +6,15 @@ const dotenv = require("dotenv");
 const {
   getMissingAwsConfig,
   createS3Client,
+  getViewUrl,
   uploadImage,
-  listUploadedFiles,
 } = require("./s3");
+const {
+  getMissingRdsConfig,
+  initDatabase,
+  saveProfileImage,
+  listProfileImages,
+} = require("./db");
 
 dotenv.config();
 
@@ -55,26 +61,20 @@ function getExtension(originalName, contentType) {
   return ".jpg";
 }
 
-function requireS3(req, res, next) {
-  const missing = getMissingAwsConfig();
-  if (missing.length > 0) {
-    return res.status(500).json({
-      success: false,
-      message:
-        "AWS configuration is incomplete. Check the backend .env file and restart the server.",
-    });
-  }
+function awsConfigError() {
+  return {
+    success: false,
+    message:
+      "AWS configuration is incomplete. Check the backend .env file and restart the server.",
+  };
+}
 
-  const s3Client = createS3Client();
-  if (!s3Client) {
-    return res.status(500).json({
-      success: false,
-      message: "Could not create the Amazon S3 client. Check your AWS settings.",
-    });
-  }
-
-  req.s3Client = s3Client;
-  next();
+function rdsConfigError() {
+  return {
+    success: false,
+    message:
+      "RDS configuration is incomplete. Check RDS_HOST, RDS_DATABASE, RDS_USERNAME, and RDS_PASSWORD in backend/.env.",
+  };
 }
 
 app.post("/api/upload", (req, res) => {
@@ -100,13 +100,20 @@ app.post("/api/upload", (req, res) => {
       });
     }
 
-    const missing = getMissingAwsConfig();
-    if (missing.length > 0) {
-      return res.status(500).json({
+    const studentName = String(req.body.name || "").trim().slice(0, 80);
+    if (!studentName) {
+      return res.status(400).json({
         success: false,
-        message:
-          "AWS configuration is incomplete. Check the backend .env file and restart the server.",
+        message: "Please enter the student name.",
       });
+    }
+
+    if (getMissingAwsConfig().length > 0) {
+      return res.status(500).json(awsConfigError());
+    }
+
+    if (getMissingRdsConfig().length > 0) {
+      return res.status(500).json(rdsConfigError());
     }
 
     const s3Client = createS3Client();
@@ -117,9 +124,10 @@ app.post("/api/upload", (req, res) => {
       });
     }
 
-    const studentName = sanitizeName(req.body.name);
-    const extension = getExtension(req.file.originalname, req.file.mimetype);
-    const key = `profiles/${Date.now()}_${studentName}${extension}`;
+    const key = `profiles/${Date.now()}_${sanitizeName(studentName)}${getExtension(
+      req.file.originalname,
+      req.file.mimetype
+    )}`;
 
     try {
       const url = await uploadImage(s3Client, {
@@ -128,10 +136,29 @@ app.post("/api/upload", (req, res) => {
         contentType: req.file.mimetype,
       });
 
+      let recordId;
+      try {
+        recordId = await saveProfileImage({
+          studentName,
+          key,
+          originalName: req.file.originalname,
+          contentType: req.file.mimetype,
+        });
+      } catch (dbError) {
+        console.error("RDS save failed:", dbError.code || dbError.name || "Error");
+        return res.status(500).json({
+          success: false,
+          message:
+            "The image was uploaded to S3, but saving the record to Amazon RDS failed. Check the RDS endpoint, database name, username, password, and security group.",
+        });
+      }
+
       return res.status(201).json({
         success: true,
-        message: "Image uploaded successfully",
+        message: "Image uploaded to S3 and saved in Amazon RDS",
         file: {
+          id: recordId,
+          studentName,
           key,
           originalName: req.file.originalname,
           contentType: req.file.mimetype,
@@ -149,24 +176,54 @@ app.post("/api/upload", (req, res) => {
   });
 });
 
-app.get("/api/files", requireS3, async (req, res) => {
+app.get("/api/files", async (req, res) => {
+  if (getMissingAwsConfig().length > 0) {
+    return res.status(500).json(awsConfigError());
+  }
+
+  if (getMissingRdsConfig().length > 0) {
+    return res.status(500).json(rdsConfigError());
+  }
+
+  const s3Client = createS3Client();
+  if (!s3Client) {
+    return res.status(500).json({
+      success: false,
+      message: "Could not create the Amazon S3 client. Check your AWS settings.",
+    });
+  }
+
   try {
-    const files = await listUploadedFiles(req.s3Client);
+    const rows = await listProfileImages();
+    const files = [];
+
+    for (const row of rows) {
+      const url = await getViewUrl(s3Client, row.s3_key);
+      files.push({
+        id: row.id,
+        studentName: row.student_name,
+        key: row.s3_key,
+        originalName: row.original_name,
+        contentType: row.content_type,
+        createdAt: row.created_at,
+        url,
+      });
+    }
 
     return res.json({
       success: true,
       message:
         files.length === 0
           ? "No uploaded files yet. Upload a profile image to get started."
-          : "Uploaded files retrieved successfully",
+          : "Uploaded files retrieved from Amazon RDS",
       files,
     });
   } catch (error) {
-    console.error("S3 list failed:", error.name || "Error");
+    console.error("RDS list failed:", error.code || error.name || "Error");
     return res.status(500).json({
       success: false,
       message:
-        "Could not retrieve uploaded files from Amazon S3. Check your bucket name, region, and IAM permissions.",
+        "Could not retrieve uploaded files from Amazon RDS. Check the RDS endpoint, database name, username, password, and security group.",
     });
   }
 });
@@ -178,13 +235,28 @@ app.use((req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  const missing = getMissingAwsConfig();
+app.listen(PORT, async () => {
   console.log(`Backend running on http://localhost:${PORT}`);
 
-  if (missing.length > 0) {
+  if (getMissingAwsConfig().length > 0) {
     console.warn(
-      "AWS configuration is incomplete. Copy backend/.env.example to backend/.env and fill in your values."
+      "AWS configuration is incomplete. Copy backend/.env.example to backend/.env and fill in your S3 values."
+    );
+  }
+
+  if (getMissingRdsConfig().length > 0) {
+    console.warn(
+      "RDS configuration is incomplete. Add RDS_HOST, RDS_DATABASE, RDS_USERNAME, and RDS_PASSWORD to backend/.env."
+    );
+    return;
+  }
+
+  try {
+    await initDatabase();
+    console.log("Connected to Amazon RDS and ready to store profile records.");
+  } catch (error) {
+    console.error(
+      "Could not connect to Amazon RDS. Check the endpoint, security group, and database credentials."
     );
   }
 });
