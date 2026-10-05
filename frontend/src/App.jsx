@@ -88,7 +88,7 @@ function App() {
     formData.append("image", selectedFile);
 
     setIsUploading(true);
-    setStatus({ type: "info", message: "Uploading image to S3 and saving the record in RDS..." });
+    setStatus({ type: "info", message: "Uploading image to S3 and saving the record in DynamoDB..." });
 
     try {
       const response = await fetch("/api/upload", {
@@ -129,11 +129,11 @@ function App() {
         <h1>Student Profile Image Upload</h1>
         <p>
           This app teaches the path from the browser to a Node.js backend, then
-          to Amazon S3 for the image and Amazon RDS for the student record.
+          to Amazon S3 for the image and Amazon DynamoDB for the student record.
         </p>
         <p className="architecture">
           Browser → React frontend → Express backend → Amazon S3 (image) +
-          Amazon RDS (student data)
+          Amazon DynamoDB (student data)
         </p>
       </header>
 
@@ -202,7 +202,7 @@ function App() {
         )}
 
         {isLoadingFiles && files.length === 0 && (
-          <p className="empty">Loading files from Amazon RDS...</p>
+          <p className="empty">Loading files from Amazon DynamoDB...</p>
         )}
 
         {files.length > 0 && (

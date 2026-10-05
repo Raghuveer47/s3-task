@@ -1,10 +1,10 @@
-# Student Profile Image Upload (Amazon S3 + Amazon RDS)
+# Student Profile Image Upload (Amazon S3 + Amazon DynamoDB)
 
 This is a beginner-friendly MERN example that teaches one idea:
 
-**The browser talks to your backend. Your backend stores the image in Amazon S3 and the student record in Amazon RDS.**
+**The browser talks to your backend. Your backend stores the image in Amazon S3 and the student record in Amazon DynamoDB.**
 
-The React frontend never talks to S3 or RDS directly. AWS keys and database passwords stay on the Node.js server only.
+The React frontend never talks to S3 or DynamoDB directly. AWS keys stay on the Node.js server only.
 
 ## Architecture
 
@@ -14,16 +14,16 @@ Browser
 Frontend (React)
    ↓ POST /api/upload
 Backend (Node.js / Express)
-   ├── AWS SDK → Amazon S3 → profiles/   (image file)
-   └── mysql2  → Amazon RDS MySQL        (student name + file metadata)
+   ├── AWS SDK → Amazon S3 → profiles/     (image file)
+   └── AWS SDK → Amazon DynamoDB           (student name + file metadata)
 ```
 
 After a successful upload:
 
 - the image is in the S3 bucket under `profiles/`
-- a row is saved in the `profile_images` table in RDS
+- an item is saved in the DynamoDB table
 
-`GET /api/files` reads the list from RDS, then the backend creates a short-lived S3 viewing URL for each image.
+`GET /api/files` reads the list from DynamoDB, then the backend creates a short-lived S3 viewing URL for each image.
 
 ## 1. Create an S3 bucket
 
@@ -39,13 +39,13 @@ Remember the bucket name and region. You will put both values in `.env`.
 
 ## 2. Which AWS region to select
 
-Pick one region and use it for both S3 and RDS when possible:
+Pick one region and use it for both S3 and DynamoDB:
 
 - the S3 bucket region
-- the RDS database region
+- the DynamoDB table region
 - `AWS_REGION` in `backend/.env`
 
-If the S3 bucket region and `AWS_REGION` do not match, uploads will fail.
+If these values do not match, uploads or table access will fail.
 
 Example:
 
@@ -53,49 +53,42 @@ Example:
 AWS_REGION=ap-south-1
 ```
 
-## 3. Create an Amazon RDS MySQL database
+## 3. Create an Amazon DynamoDB table
 
-1. Open **RDS** in the AWS console.
-2. Click **Create database**.
-3. Choose **Standard create**.
-4. Engine: **MySQL**.
-5. For class work, **Free tier** or **Burstable** (`db.t3.micro` / `db.t4g.micro`) is enough.
-6. Set a master username, for example `admin`, and a strong password.
-7. Create an initial database name: `student_profiles`.
-8. Under **Connectivity**:
-   - VPC: default is fine for a class demo.
-   - Public access: **Yes** if you are running the Node.js backend on your laptop.
-   - VPC security group: allow inbound **MySQL / TCP 3306** from **your IP address**.
-9. Create the database and wait until the status is **Available**.
-10. Copy the **endpoint**. It looks like:
+You can let the backend create the table on startup, or create it yourself in the console.
+
+Console steps:
+
+1. Open **DynamoDB**.
+2. Click **Create table**.
+3. Table name: `profile_images`
+4. Partition key: `id` (String)
+5. Keep the default on-demand capacity settings.
+6. Create the table in the **same region** as your S3 bucket.
+
+Table item shape:
 
 ```text
-student-profiles.xxxxx.ap-south-1.rds.amazonaws.com
+id            String   unique record id
+studentName   String   student name
+s3Key         String   profiles/1727000000_Ada.jpg
+originalName  String   profile.jpg
+contentType   String   image/jpeg
+createdAt     String   ISO timestamp
 ```
 
-That endpoint is `RDS_HOST`. Do not use the IP address.
-
-The backend creates this table automatically on startup:
-
-```sql
-CREATE TABLE IF NOT EXISTS profile_images (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  student_name VARCHAR(80) NOT NULL,
-  s3_key VARCHAR(255) NOT NULL UNIQUE,
-  original_name VARCHAR(255) NOT NULL,
-  content_type VARCHAR(100) NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+If the table does not exist, the backend creates it automatically with partition key `id`.
 
 ## 4. IAM permissions the backend needs
 
-The backend uses IAM only for S3. RDS is accessed with the database username and password, not with IAM keys.
-
-S3 policy:
+The same IAM user now needs S3 and DynamoDB permissions.
 
 - `s3:PutObject` on `arn:aws:s3:::YOUR_BUCKET_NAME/profiles/*`
 - `s3:GetObject` on `arn:aws:s3:::YOUR_BUCKET_NAME/profiles/*`
+- `dynamodb:PutItem` on the table
+- `dynamodb:Scan` on the table
+- `dynamodb:DescribeTable` on the table
+- `dynamodb:CreateTable` if you want the backend to create the table
 
 Example policy:
 
@@ -107,14 +100,22 @@ Example policy:
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
       "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/profiles/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:Scan",
+        "dynamodb:DescribeTable",
+        "dynamodb:CreateTable"
+      ],
+      "Resource": "arn:aws:dynamodb:YOUR_REGION:YOUR_ACCOUNT_ID:table/profile_images"
     }
   ]
 }
 ```
 
-Create an access key for that IAM user. Paste the access key ID and secret access key into `.env`.
-
-Do **not** put these keys or the RDS password in frontend JavaScript.
+Do **not** put AWS keys in frontend JavaScript.
 
 ## 5. Configure the `.env` file
 
@@ -131,18 +132,12 @@ AWS_REGION=ap-south-1
 AWS_ACCESS_KEY_ID=your_access_key_id_here
 AWS_SECRET_ACCESS_KEY=your_secret_access_key_here
 S3_BUCKET_NAME=your_bucket_name_here
-
-RDS_HOST=your-db-instance.xxxxx.ap-south-1.rds.amazonaws.com
-RDS_PORT=3306
-RDS_DATABASE=student_profiles
-RDS_USERNAME=admin
-RDS_PASSWORD=your_rds_password_here
-RDS_SSL=true
+DYNAMODB_TABLE_NAME=profile_images
 ```
 
-Never commit `.env`. It is already listed in `.gitignore`.
+Remove any old `RDS_*` values. They are no longer used.
 
-If the RDS connection fails because of SSL, you can set `RDS_SSL=false` for a classroom demo. Keep the security group limited to your IP.
+Never commit `.env`. It is already listed in `.gitignore`.
 
 ## 6. Install dependencies
 
@@ -171,7 +166,7 @@ The API should run at `http://localhost:5050`.
 
 This project uses port `5050` because macOS often occupies port `5000`.
 
-A successful start prints that the backend connected to Amazon RDS.
+A successful start prints that the backend connected to Amazon DynamoDB.
 
 ## 8. Start the frontend
 
@@ -207,7 +202,7 @@ curl -X POST http://localhost:5050/api/upload \
 curl http://localhost:5050/api/files
 ```
 
-## 10. Verify the object in S3 and the row in RDS
+## 10. Verify the object in S3 and the item in DynamoDB
 
 S3:
 
@@ -215,25 +210,18 @@ S3:
 2. Open the `profiles/` folder.
 3. You should see a new object such as `1727000000_Ada.jpg`.
 
-RDS:
+DynamoDB:
 
-1. Connect with any MySQL client, or use **RDS Query Editor** if available.
-2. Run:
-
-```sql
-SELECT id, student_name, s3_key, original_name, created_at
-FROM profile_images
-ORDER BY created_at DESC;
-```
-
-3. You should see a row with the student name and S3 key.
+1. Open **DynamoDB** → **Explore items**.
+2. Open the `profile_images` table.
+3. You should see an item with the student name and S3 key.
 
 ## API endpoints
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/upload` | Upload the image to S3 and save metadata in RDS |
-| GET | `/api/files` | Read saved records from RDS and return viewing URLs |
+| POST | `/api/upload` | Upload the image to S3 and save metadata in DynamoDB |
+| GET | `/api/files` | Read saved records from DynamoDB and return viewing URLs |
 
 `POST /api/upload` accepts `multipart/form-data` with:
 
@@ -245,9 +233,9 @@ Success response:
 ```json
 {
   "success": true,
-  "message": "Image uploaded to S3 and saved in Amazon RDS",
+  "message": "Image uploaded to S3 and saved in Amazon DynamoDB",
   "file": {
-    "id": 1,
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "studentName": "Ada",
     "key": "profiles/1727000000_Ada.jpg",
     "originalName": "profile.jpg",
@@ -268,15 +256,14 @@ The `url` value is a controlled, time-limited S3 viewing link generated by the b
 | File too large | Use an image under 5 MB |
 | Backend unavailable | Start the Node.js server on port 5050 |
 | AWS configuration is incomplete | Fill in the S3 values in `backend/.env` |
-| RDS configuration is incomplete | Fill in `RDS_HOST`, `RDS_DATABASE`, `RDS_USERNAME`, and `RDS_PASSWORD` |
+| DynamoDB configuration is incomplete | Add `DYNAMODB_TABLE_NAME` to `backend/.env` |
 | Could not upload to S3 | Check bucket name, region, and IAM permissions |
-| Saving the record to Amazon RDS failed | Check the RDS endpoint, password, database name, and security group port 3306 |
-| Could not retrieve uploaded files from Amazon RDS | The backend cannot connect to RDS or the table query failed |
+| Saving the record to DynamoDB failed | Check the table name, region, and DynamoDB IAM permissions |
+| Could not retrieve uploaded files from DynamoDB | The backend cannot read the table |
 
 ## Security notes for students
 
-- AWS keys and the RDS password belong only in `backend/.env`.
-- The frontend never uses the AWS SDK or a database client.
+- AWS keys belong only in `backend/.env`.
+- The frontend never uses the AWS SDK.
 - Keep the S3 bucket private.
-- Do not open RDS port 3306 to `0.0.0.0/0` if you can avoid it. Allow only your IP.
 - The backend creates signed S3 URLs so images can be previewed without making the bucket public.

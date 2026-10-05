@@ -10,11 +10,11 @@ const {
   uploadImage,
 } = require("./s3");
 const {
-  getMissingRdsConfig,
-  initDatabase,
+  getMissingDynamoConfig,
+  initTable,
   saveProfileImage,
   listProfileImages,
-} = require("./db");
+} = require("./dynamodb");
 
 dotenv.config();
 
@@ -69,11 +69,11 @@ function awsConfigError() {
   };
 }
 
-function rdsConfigError() {
+function dynamoConfigError() {
   return {
     success: false,
     message:
-      "RDS configuration is incomplete. Check RDS_HOST, RDS_DATABASE, RDS_USERNAME, and RDS_PASSWORD in backend/.env.",
+      "DynamoDB configuration is incomplete. Add DYNAMODB_TABLE_NAME to backend/.env.",
   };
 }
 
@@ -112,8 +112,8 @@ app.post("/api/upload", (req, res) => {
       return res.status(500).json(awsConfigError());
     }
 
-    if (getMissingRdsConfig().length > 0) {
-      return res.status(500).json(rdsConfigError());
+    if (getMissingDynamoConfig().length > 0) {
+      return res.status(500).json(dynamoConfigError());
     }
 
     const s3Client = createS3Client();
@@ -145,17 +145,17 @@ app.post("/api/upload", (req, res) => {
           contentType: req.file.mimetype,
         });
       } catch (dbError) {
-        console.error("RDS save failed:", dbError.code || dbError.name || "Error");
+        console.error("DynamoDB save failed:", dbError.name || "Error");
         return res.status(500).json({
           success: false,
           message:
-            "The image was uploaded to S3, but saving the record to Amazon RDS failed. Check the RDS endpoint, database name, username, password, and security group.",
+            "The image was uploaded to S3, but saving the record to DynamoDB failed. Check the table name, region, and IAM permissions.",
         });
       }
 
       return res.status(201).json({
         success: true,
-        message: "Image uploaded to S3 and saved in Amazon RDS",
+        message: "Image uploaded to S3 and saved in Amazon DynamoDB",
         file: {
           id: recordId,
           studentName,
@@ -181,8 +181,8 @@ app.get("/api/files", async (req, res) => {
     return res.status(500).json(awsConfigError());
   }
 
-  if (getMissingRdsConfig().length > 0) {
-    return res.status(500).json(rdsConfigError());
+  if (getMissingDynamoConfig().length > 0) {
+    return res.status(500).json(dynamoConfigError());
   }
 
   const s3Client = createS3Client();
@@ -198,14 +198,14 @@ app.get("/api/files", async (req, res) => {
     const files = [];
 
     for (const row of rows) {
-      const url = await getViewUrl(s3Client, row.s3_key);
+      const url = await getViewUrl(s3Client, row.s3Key);
       files.push({
         id: row.id,
-        studentName: row.student_name,
-        key: row.s3_key,
-        originalName: row.original_name,
-        contentType: row.content_type,
-        createdAt: row.created_at,
+        studentName: row.studentName,
+        key: row.s3Key,
+        originalName: row.originalName,
+        contentType: row.contentType,
+        createdAt: row.createdAt,
         url,
       });
     }
@@ -215,15 +215,15 @@ app.get("/api/files", async (req, res) => {
       message:
         files.length === 0
           ? "No uploaded files yet. Upload a profile image to get started."
-          : "Uploaded files retrieved from Amazon RDS",
+          : "Uploaded files retrieved from Amazon DynamoDB",
       files,
     });
   } catch (error) {
-    console.error("RDS list failed:", error.code || error.name || "Error");
+    console.error("DynamoDB list failed:", error.name || "Error");
     return res.status(500).json({
       success: false,
       message:
-        "Could not retrieve uploaded files from Amazon RDS. Check the RDS endpoint, database name, username, password, and security group.",
+        "Could not retrieve uploaded files from DynamoDB. Check the table name, region, and IAM permissions.",
     });
   }
 });
@@ -244,19 +244,19 @@ app.listen(PORT, async () => {
     );
   }
 
-  if (getMissingRdsConfig().length > 0) {
+  if (getMissingDynamoConfig().length > 0) {
     console.warn(
-      "RDS configuration is incomplete. Add RDS_HOST, RDS_DATABASE, RDS_USERNAME, and RDS_PASSWORD to backend/.env."
+      "DynamoDB configuration is incomplete. Add DYNAMODB_TABLE_NAME to backend/.env."
     );
     return;
   }
 
   try {
-    await initDatabase();
-    console.log("Connected to Amazon RDS and ready to store profile records.");
+    await initTable();
+    console.log("Connected to Amazon DynamoDB and ready to store profile records.");
   } catch (error) {
     console.error(
-      "Could not connect to Amazon RDS. Check the endpoint, security group, and database credentials."
+      "Could not connect to Amazon DynamoDB. Check the table name, region, and IAM permissions."
     );
   }
 });
